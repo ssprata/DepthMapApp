@@ -1,0 +1,278 @@
+import os
+import sys
+import time
+import requests
+import cv2
+import numpy as np
+import onnxruntime as ort
+import threading
+
+# Configuration
+MODELS = {
+    "small": {
+        "url": "https://huggingface.co/onnx-community/depth-anything-v2-small/resolve/main/onnx/model.onnx",
+        "filename": "depth_anything_v2_vit_small.onnx"
+    },
+    "base": {
+        "url": "https://huggingface.co/onnx-community/depth-anything-v2-base/resolve/main/onnx/model.onnx",
+        "filename": "depth_anything_v2_vit_base.onnx"
+    }
+}
+
+COLORMAPS = {
+    "grayscale": None,
+    "inferno": cv2.COLORMAP_INFERNO,
+    "plasma": cv2.COLORMAP_PLASMA,
+    "magma": cv2.COLORMAP_MAGMA,
+    "viridis": cv2.COLORMAP_VIRIDIS
+}
+
+class DepthProcessor:
+    def __init__(self, base_dir=None):
+        self.base_dir = base_dir or os.path.dirname(os.path.abspath(__file__))
+        self.models_dir = os.path.join(self.base_dir, "models")
+        os.makedirs(self.models_dir, exist_ok=True)
+        
+        # State tracking
+        self.state = {
+            "status": "idle",       # idle, downloading, loading, processing, done, error
+            "progress": 0.0,       # 0.0 to 100.0
+            "current_frame": 0,
+            "total_frames": 0,
+            "error_message": "",
+            "download_speed": ""
+        }
+        self.state_lock = threading.Lock()
+        self._cancel_flag = False
+
+    def update_state(self, **kwargs):
+        with self.state_lock:
+            self.state.update(kwargs)
+
+    def get_state(self):
+        with self.state_lock:
+            return self.state.copy()
+
+    def cancel(self):
+        self._cancel_flag = True
+
+    def download_model(self, model_key):
+        model_info = MODELS.get(model_key)
+        if not model_info:
+            raise ValueError(f"Unknown model: {model_key}")
+        
+        dest_path = os.path.join(self.models_dir, model_info["filename"])
+        if os.path.exists(dest_path) and os.path.getsize(dest_path) > 10000000:
+            # Model exists and size seems reasonable (more than 10MB)
+            return dest_path
+
+        self.update_state(status="downloading", progress=0.0, error_message="")
+        
+        url = model_info["url"]
+        temp_path = dest_path + ".tmp"
+        
+        try:
+            response = requests.get(url, stream=True)
+            response.raise_for_status()
+            total_size = int(response.headers.get('content-length', 0))
+            
+            downloaded = 0
+            start_time = time.time()
+            
+            with open(temp_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if self._cancel_flag:
+                        self.update_state(status="idle", progress=0.0)
+                        f.close()
+                        if os.path.exists(temp_path):
+                            os.remove(temp_path)
+                        return None
+                        
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total_size > 0:
+                            percent = (downloaded / total_size) * 100
+                            elapsed = time.time() - start_time
+                            speed_mb = (downloaded / (1024 * 1024)) / (elapsed if elapsed > 0 else 1)
+                            speed_str = f"{speed_mb:.2f} MB/s"
+                            self.update_state(progress=round(percent, 1), download_speed=speed_str)
+            
+            os.rename(temp_path, dest_path)
+            self.update_state(status="idle", progress=0.0, download_speed="")
+            return dest_path
+            
+        except Exception as e:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            self.update_state(status="error", error_message=f"Download failed: {str(e)}")
+            raise e
+
+    def process_video(self, input_video_path, output_video_path, model_key="small", colormap_key="grayscale"):
+        self._cancel_flag = False
+        self.update_state(status="starting", progress=0.0, current_frame=0, total_frames=0, error_message="")
+        
+        try:
+            # 1. Download model if needed
+            model_path = self.download_model(model_key)
+            if not model_path:
+                return False
+
+            self.update_state(status="loading", progress=0.0)
+            
+            # 2. Initialize ONNX Session
+            # We want DML (DirectML) or CUDA if available, but fallback to CPU
+            providers = ['DmlExecutionProvider', 'CUDAExecutionProvider', 'CPUExecutionProvider']
+            try:
+                session = ort.InferenceSession(model_path, providers=providers)
+            except Exception as e:
+                # Fallback to standard CPU if custom execution provider fails
+                session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
+            
+            input_name = session.get_inputs()[0].name
+            
+            # 3. Open Video
+            cap = cv2.VideoCapture(input_video_path)
+            if not cap.isOpened():
+                raise ValueError("Could not open input video.")
+                
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            
+            if total_frames <= 0:
+                # Fallback estimate
+                total_frames = 100
+                
+            self.update_state(status="processing", total_frames=total_frames, current_frame=0)
+            
+            # 4. Set up Video Writer
+            # Using H.264 (avc1) for native browser playback with mp4v as fallback.
+            try:
+                fourcc = cv2.VideoWriter_fourcc(*'avc1')
+                out = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height))
+                if not out.isOpened():
+                    raise Exception("avc1 writer failed to open")
+            except Exception:
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                out = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height))
+            
+            frame_idx = 0
+            
+            # ImageNet normalization stats
+            mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+            std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+            
+            # Temporal smoothing variables
+            smooth_min = None
+            smooth_max = None
+            prev_depth_norm = None
+            
+            while cap.isOpened():
+                if self._cancel_flag:
+                    self.update_state(status="cancelled")
+                    break
+                    
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                # Preprocess Frame
+                # cv2 reads in BGR, model expects RGB
+                img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                
+                # Model input resolution is 518x518
+                input_size = 518
+                img_resized = cv2.resize(img_rgb, (input_size, input_size))
+                
+                # Normalize and prepare tensor
+                img_normalized = img_resized.astype(np.float32) / 255.0
+                img_normalized = (img_normalized - mean) / std
+                img_transposed = np.transpose(img_normalized, (2, 0, 1)) # HWC to CHW
+                input_data = np.expand_dims(img_transposed, axis=0) # Add batch size
+                
+                # Run Inference
+                outputs = session.run(None, {input_name: input_data})
+                depth = outputs[0][0] # Retrieve first item of batch [518, 518]
+
+                # Postprocess Depth Map
+                # 1. Normalize depth values using smoothed min/max bounds to prevent flashing
+                current_min = depth.min()
+                current_max = depth.max()
+                
+                if smooth_min is None:
+                    smooth_min = current_min
+                    smooth_max = current_max
+                else:
+                    alpha_range = 0.1 # Gradual dynamic range shifts
+                    smooth_min = alpha_range * current_min + (1.0 - alpha_range) * smooth_min
+                    smooth_max = alpha_range * current_max + (1.0 - alpha_range) * smooth_max
+
+                if smooth_max - smooth_min > 0:
+                    depth_norm = 255.0 * (depth - smooth_min) / (smooth_max - smooth_min + 1e-5)
+                else:
+                    depth_norm = np.zeros_like(depth)
+                
+                # Clip to prevent overflow and keep as float32 for high-precision blending
+                depth_norm = np.clip(depth_norm, 0, 255).astype(np.float32)
+                
+                # Motion-Adaptive Temporal Blending
+                if prev_depth_norm is None:
+                    prev_depth_norm = depth_norm.copy()
+                else:
+                    # Calculate pixel difference between frames
+                    diff = np.abs(depth_norm - prev_depth_norm)
+                    
+                    # Interpolate blend factor alpha based on motion:
+                    # diff <= 5: noise/static region (alpha = 0.15, heavy history blend)
+                    # diff >= 25: structural motion (alpha = 1.0, instant update, no blend/ghosting)
+                    alpha = np.clip((diff - 5.0) / (25.0 - 5.0), 0.0, 1.0)
+                    alpha = 0.15 + 0.85 * alpha
+                    
+                    # Apply pixel blending and update history
+                    depth_norm = alpha * depth_norm + (1.0 - alpha) * prev_depth_norm
+                    prev_depth_norm = depth_norm.copy()
+                
+                depth_norm_uint8 = depth_norm.astype(np.uint8)
+                
+                # 2. Resize back to original dimensions
+                depth_resized = cv2.resize(depth_norm_uint8, (width, height))
+                
+                # Apply fast spatial median filter to clean up raw prediction pixel jitter
+                depth_resized = cv2.medianBlur(depth_resized, 3)
+                
+                # 3. Apply color mapping if requested
+                colormap_id = COLORMAPS.get(colormap_key)
+                if colormap_id is not None:
+                    depth_final = cv2.applyColorMap(depth_resized, colormap_id)
+                else:
+                    depth_final = cv2.cvtColor(depth_resized, cv2.COLOR_GRAY2BGR)
+                
+                # Write to output
+                out.write(depth_final)
+                
+                # Update progress
+                frame_idx += 1
+                percent = (frame_idx / total_frames) * 100
+                self.update_state(progress=round(percent, 1), current_frame=frame_idx)
+                
+            cap.release()
+            out.release()
+            
+            if self._cancel_flag:
+                if os.path.exists(output_video_path):
+                    os.remove(output_video_path)
+                return False
+                
+            self.update_state(status="done", progress=100.0)
+            return True
+            
+        except Exception as e:
+            self.update_state(status="error", error_message=str(e))
+            import traceback
+            traceback.print_exc()
+            return False
+
+# Single global instance for easy access
+processor = DepthProcessor()
