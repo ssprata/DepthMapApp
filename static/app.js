@@ -7,6 +7,8 @@ const fileSizeEl = document.getElementById('file-size');
 const removeFileBtn = document.getElementById('remove-file');
 
 const modelSelect = document.getElementById('model-select');
+const blendSlider = document.getElementById('blend-slider');
+const blendVal = document.getElementById('blend-val');
 const paletteCards = document.querySelectorAll('.palette-card');
 const generateBtn = document.getElementById('generate-btn');
 
@@ -110,6 +112,11 @@ paletteCards.forEach(card => {
     });
 });
 
+// Blend slider change
+blendSlider.addEventListener('input', (e) => {
+    blendVal.textContent = parseFloat(e.target.value).toFixed(2);
+});
+
 // Upload and Process Logic
 generateBtn.addEventListener('click', () => {
     if (!selectedFile) return;
@@ -180,11 +187,13 @@ function triggerDepthEstimation(filename) {
 
     const modelVal = modelSelect.value;
     const colormapVal = document.querySelector('input[name="colormap"]:checked').value;
+    const blendValStr = blendSlider.value;
 
     const formData = new FormData();
     formData.append("filename", filename);
     formData.append("model", modelVal);
     formData.append("colormap", colormapVal);
+    formData.append("blend", blendValStr);
 
     fetch("/api/process", {
         method: "POST",

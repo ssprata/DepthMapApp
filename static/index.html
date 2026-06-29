@@ -74,6 +74,15 @@
                     </div>
 
                     <div class="form-group">
+                        <label for="blend-slider">Temporal Smoothing (Frame Blending)</label>
+                        <div class="slider-container">
+                            <input type="range" id="blend-slider" min="0.1" max="1.0" step="0.05" value="0.6">
+                            <span id="blend-val">0.60</span>
+                        </div>
+                        <small class="help-text">Lower values (e.g. 0.3) smooth flickering but add motion trails. Higher values (e.g. 0.8) are sharp and responsive but may flicker.</small>
+                    </div>
+
+                    <div class="form-group">
                         <label>Depth Map Palette / Color Space</label>
                         <div class="palette-options">
                             <label class="palette-card active">

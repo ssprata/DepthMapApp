@@ -108,7 +108,7 @@ class DepthProcessor:
             self.update_state(status="error", error_message=f"Download failed: {str(e)}")
             raise e
 
-    def process_video(self, input_video_path, output_video_path, model_key="small", colormap_key="grayscale"):
+    def process_video(self, input_video_path, output_video_path, model_key="small", colormap_key="grayscale", blend=0.6):
         self._cancel_flag = False
         self.update_state(status="starting", progress=0.0, current_frame=0, total_frames=0, error_message="")
         
@@ -219,9 +219,10 @@ class DepthProcessor:
                 if prev_depth_norm is None:
                     prev_depth_norm = depth_norm.copy()
                 else:
-                    # Revert to a constant frame blending factor for stable, flicker-free videos
-                    # alpha = 0.3 means 30% current frame, 70% history, smoothing out frame-to-frame fluctuations
-                    alpha = 0.3
+                    # Use the user-configured frame blending factor (alpha)
+                    # Lower alpha values blend more history (less flicker, more trails).
+                    # Higher alpha values blend less history (more responsive, more flicker).
+                    alpha = blend
                     depth_norm = alpha * depth_norm + (1.0 - alpha) * prev_depth_norm
                     prev_depth_norm = depth_norm.copy()
                 

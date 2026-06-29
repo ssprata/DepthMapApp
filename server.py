@@ -80,14 +80,15 @@ async def upload_file(file: UploadFile = File(...)):
             os.remove(temp_path)
         raise HTTPException(status_code=500, detail=f"Failed to upload/transcode file: {str(e)}")
 
-def run_in_background(input_path, output_path, model, colormap):
-    processor.process_video(input_path, output_path, model_key=model, colormap_key=colormap)
+def run_in_background(input_path, output_path, model, colormap, blend):
+    processor.process_video(input_path, output_path, model_key=model, colormap_key=colormap, blend=blend)
 
 @app.post("/api/process")
 async def start_process(
     filename: str = Form(...),
     model: str = Form("small"),
-    colormap: str = Form("grayscale")
+    colormap: str = Form("grayscale"),
+    blend: float = Form(0.6)
 ):
     input_path = os.path.join(UPLOAD_DIR, filename)
     if not os.path.exists(input_path):
@@ -108,7 +109,7 @@ async def start_process(
     # Run processing in a background thread so FastAPI remains responsive
     thread = threading.Thread(
         target=run_in_background,
-        args=(input_path, output_path, model, colormap),
+        args=(input_path, output_path, model, colormap, blend),
         daemon=True
     )
     thread.start()
