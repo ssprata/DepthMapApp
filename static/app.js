@@ -302,9 +302,9 @@ function showResults(origFilename, outputFilename) {
     resultsSection.classList.remove('hidden');
     
     // Set video sources pointing to range-supporting static endpoints
-    videoSource.src = `/videos/upload/${origFilename}`;
-    videoDepth.src = `/videos/output/${outputFilename}`;
-    downloadBtn.href = `/videos/output/${outputFilename}`;
+    videoSource.src = `/api/videos/upload/${origFilename}`;
+    videoDepth.src = `/api/videos/output/${outputFilename}`;
+    downloadBtn.href = `/api/videos/output/${outputFilename}`;
     
     // Load videos
     videoSource.load();

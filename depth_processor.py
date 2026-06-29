@@ -148,15 +148,13 @@ class DepthProcessor:
             self.update_state(status="processing", total_frames=total_frames, current_frame=0)
             
             # 4. Set up Video Writer
-            # Using H.264 (avc1) for native browser playback with mp4v as fallback.
-            try:
-                fourcc = cv2.VideoWriter_fourcc(*'avc1')
-                out = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height))
-                if not out.isOpened():
-                    raise Exception("avc1 writer failed to open")
-            except Exception:
-                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                out = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height))
+            # We write to a temporary file first using the standard mp4v codec,
+            # which is universally supported by OpenCV on all platforms.
+            temp_output_path = output_video_path + ".temp.mp4"
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out = cv2.VideoWriter(temp_output_path, fourcc, fps, (width, height))
+            if not out.isOpened():
+                raise Exception("Failed to open OpenCV VideoWriter with mp4v codec")
             
             frame_idx = 0
             
@@ -217,20 +215,13 @@ class DepthProcessor:
                 # Clip to prevent overflow and keep as float32 for high-precision blending
                 depth_norm = np.clip(depth_norm, 0, 255).astype(np.float32)
                 
-                # Motion-Adaptive Temporal Blending
+                # Constant Temporal Frame Blending
                 if prev_depth_norm is None:
                     prev_depth_norm = depth_norm.copy()
                 else:
-                    # Calculate pixel difference between frames
-                    diff = np.abs(depth_norm - prev_depth_norm)
-                    
-                    # Interpolate blend factor alpha based on motion:
-                    # diff <= 5: noise/static region (alpha = 0.15, heavy history blend)
-                    # diff >= 25: structural motion (alpha = 1.0, instant update, no blend/ghosting)
-                    alpha = np.clip((diff - 5.0) / (25.0 - 5.0), 0.0, 1.0)
-                    alpha = 0.15 + 0.85 * alpha
-                    
-                    # Apply pixel blending and update history
+                    # Revert to a constant frame blending factor for stable, flicker-free videos
+                    # alpha = 0.3 means 30% current frame, 70% history, smoothing out frame-to-frame fluctuations
+                    alpha = 0.3
                     depth_norm = alpha * depth_norm + (1.0 - alpha) * prev_depth_norm
                     prev_depth_norm = depth_norm.copy()
                 
@@ -261,14 +252,42 @@ class DepthProcessor:
             out.release()
             
             if self._cancel_flag:
+                if os.path.exists(temp_output_path):
+                    os.remove(temp_output_path)
                 if os.path.exists(output_video_path):
                     os.remove(output_video_path)
                 return False
+                
+            # Transcode the temporary video to a browser-compatible web-optimized H.264 MP4 with faststart
+            import subprocess
+            try:
+                cmd = [
+                    'ffmpeg', '-y',
+                    '-i', temp_output_path,
+                    '-c:v', 'libx264',
+                    '-pix_fmt', 'yuv420p',
+                    '-preset', 'fast',
+                    '-crf', '22',
+                    '-movflags', '+faststart',
+                    output_video_path
+                ]
+                subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            finally:
+                # Clean up temp file
+                if os.path.exists(temp_output_path):
+                    os.remove(temp_output_path)
                 
             self.update_state(status="done", progress=100.0)
             return True
             
         except Exception as e:
+            # Clean up temp file in case of error
+            temp_path_local = locals().get('temp_output_path', None)
+            if temp_path_local and os.path.exists(temp_path_local):
+                try:
+                    os.remove(temp_path_local)
+                except Exception:
+                    pass
             self.update_state(status="error", error_message=str(e))
             import traceback
             traceback.print_exc()

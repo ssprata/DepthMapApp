@@ -42,16 +42,43 @@ def read_root():
 
 @app.post("/api/upload")
 async def upload_file(file: UploadFile = File(...)):
-    # Standardize filename
+    # Standardize filename and force .mp4 extension
     filename = file.filename.replace(" ", "_")
+    base_name, _ = os.path.splitext(filename)
+    filename = f"{base_name}.mp4"
     dest_path = os.path.join(UPLOAD_DIR, filename)
     
+    temp_path = dest_path + ".tmp"
+    
     try:
-        with open(dest_path, "wb") as buffer:
+        with open(temp_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
+            
+        # Transcode to a web-compatible H.264 MP4 using FFmpeg
+        import subprocess
+        cmd = [
+            'ffmpeg', '-y',
+            '-i', temp_path,
+            '-c:v', 'libx264',
+            '-pix_fmt', 'yuv420p',
+            '-preset', 'fast',
+            '-crf', '23',
+            '-c:a', 'aac',
+            '-map', '0:v:0',
+            '-map', '0:a?',
+            dest_path
+        ]
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        
+        # Clean up temp file
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+            
         return {"filename": filename, "path": dest_path}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e)}")
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise HTTPException(status_code=500, detail=f"Failed to upload/transcode file: {str(e)}")
 
 def run_in_background(input_path, output_path, model, colormap):
     processor.process_video(input_path, output_path, model_key=model, colormap_key=colormap)
@@ -74,7 +101,8 @@ async def start_process(
             content={"detail": f"Server is busy: {current_state['status']}"}
         )
         
-    output_filename = f"depth_{colormap}_{filename}"
+    base_name, _ = os.path.splitext(filename)
+    output_filename = f"depth_{colormap}_{base_name}.mp4"
     output_path = os.path.join(OUTPUT_DIR, output_filename)
     
     # Run processing in a background thread so FastAPI remains responsive
