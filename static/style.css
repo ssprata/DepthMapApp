@@ -321,6 +321,11 @@ select {
     transition: var(--transition-fast);
 }
 
+select option {
+    background-color: #14141f;
+    color: var(--text-primary);
+}
+
 select:focus {
     outline: none;
     border-color: var(--primary);

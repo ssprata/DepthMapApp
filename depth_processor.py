@@ -16,6 +16,10 @@ MODELS = {
     "base": {
         "url": "https://huggingface.co/onnx-community/depth-anything-v2-base/resolve/main/onnx/model.onnx",
         "filename": "depth_anything_v2_vit_base.onnx"
+    },
+    "large": {
+        "url": "https://huggingface.co/onnx-community/depth-anything-v2-large/resolve/main/onnx/model.onnx",
+        "filename": "depth_anything_v2_vit_large.onnx"
     }
 }
 
