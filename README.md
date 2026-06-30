@@ -7,15 +7,17 @@
 ## 🚀 Key Features
 
 - **Local Execution:** Your videos and data never leave your computer. Processing runs entirely locally using CPU or GPU (via ONNX Runtime).
-- **Depth Anything V2 Support:** Leverages cutting-edge monocular depth estimation models.
-  - `small` (vit_small.onnx) - Extremely fast, perfect for quick drafts and lower-spec hardware.
-  - `base` (vit_base.onnx) - High fidelity, captures details with crisp boundaries.
+- **Depth Anything V2 Support:** Leverages cutting-edge monocular depth estimation models:
+  - `small` (vit_small.onnx) - Extremely fast, perfect for quick drafts and lower-spec hardware (~95 MB).
+  - `base` (vit_base.onnx) - High fidelity, captures details with crisp boundaries (~190 MB).
+  - `large` (vit_large.onnx) - Production-quality, extremely detailed depth estimation for professional workflows (~1.3 GB).
+- **Temporal Smoothing:** Configurable frame-blending factor (0.1 - 1.0) to eliminate depth map flickering in videos.
 - **Multiple Colormaps:** Export depth maps in your choice of colorizations:
-  - `grayscale`
-  - `inferno`
-  - `plasma`
-  - `magma`
-  - `viridis`
+  - `grayscale` (Raw depth map)
+  - `inferno` (Cinematic)
+  - `plasma` (Electric)
+  - `magma` (Volcanic)
+  - `viridis` (Scientific)
 - **Dynamic Web Dashboard:** A responsive, sleek user interface featuring a gorgeous dark mode, ambient glows, progress feedback, download metrics, and a side-by-side video player to preview output.
 - **Robust Processing State:** Start, track, or cancel rendering at any time.
 
@@ -62,6 +64,6 @@ depth-map-app/
 DepthMap Maker exposes a simple REST API for custom integrations:
 
 - **`POST /api/upload`**: Uploads a raw video file.
-- **`POST /api/process`**: Starts a background thread to process depth estimation. Expects `filename`, `model`, and `colormap`.
+- **`POST /api/process`**: Starts a background thread to process depth estimation. Expects `filename`, `model` (`small`, `base`, or `large`), `colormap` (e.g. `grayscale`, `inferno`), and `blend` (float from 0.1 to 1.0).
 - **`GET /api/status`**: Returns the current processing state (idle, downloading, processing, error, etc.) and progress percentages.
 - **`POST /api/cancel`**: Safely interrupts the active model execution.
