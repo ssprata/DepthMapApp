@@ -31,6 +31,62 @@ COLORMAPS = {
     "viridis": cv2.COLORMAP_VIRIDIS
 }
 
+def decode_base64_mask(mask_data_url):
+    if not mask_data_url:
+        return None
+    import base64
+    if "," in mask_data_url:
+        encoded = mask_data_url.split(",", 1)[1]
+    else:
+        encoded = mask_data_url
+    try:
+        img_bytes = base64.b64decode(encoded)
+        nparr = np.frombuffer(img_bytes, np.uint8)
+        mask_rgba = cv2.imdecode(nparr, cv2.IMREAD_UNCHANGED)
+        return mask_rgba
+    except Exception as e:
+        print(f"decode_base64_mask error: {e}")
+        return None
+
+def get_warped_mask(initial_mask_crop, initial_override_crop, bbox, frame_w, frame_h):
+    x_i, y_i, w_i, h_i = bbox
+    
+    # Clip coordinates to frame boundaries
+    x_start = max(0, x_i)
+    y_start = max(0, y_i)
+    x_end = min(frame_w, x_i + w_i)
+    y_end = min(frame_h, y_i + h_i)
+    
+    # Calculate crop width and height in the destination
+    dest_w = x_end - x_start
+    dest_h = y_end - y_start
+    
+    if dest_w <= 0 or dest_h <= 0 or w_i <= 0 or h_i <= 0:
+        return np.zeros((frame_h, frame_w), dtype=np.uint8), np.zeros((frame_h, frame_w), dtype=bool)
+        
+    # Resize initial crops to the tracker's bounding box size
+    resized_values = cv2.resize(initial_mask_crop, (w_i, h_i), interpolation=cv2.INTER_LINEAR)
+    resized_override = cv2.resize(initial_override_crop.astype(np.uint8), (w_i, h_i), interpolation=cv2.INTER_NEAREST)
+    
+    # If the bounding box went partially out of frame, we crop the resized mask
+    src_x_start = max(0, -x_i)
+    src_y_start = max(0, -y_i)
+    src_x_end = min(src_x_start + dest_w, resized_values.shape[1])
+    src_y_end = min(src_y_start + dest_h, resized_values.shape[0])
+    
+    cropped_values = resized_values[src_y_start:src_y_end, src_x_start:src_x_end]
+    cropped_override = resized_override[src_y_start:src_y_end, src_x_start:src_x_end]
+    
+    # Place inside full frame size masks
+    active_mask = np.zeros((frame_h, frame_w), dtype=np.uint8)
+    override_mask = np.zeros((frame_h, frame_w), dtype=bool)
+    
+    c_h, c_w = cropped_values.shape
+    active_mask[y_start:y_start+c_h, x_start:x_start+c_w] = cropped_values
+    override_mask[y_start:y_start+c_h, x_start:x_start+c_w] = cropped_override > 0
+    
+    return active_mask, override_mask
+
 class DepthProcessor:
     def __init__(self, base_dir=None):
         self.base_dir = base_dir or os.path.dirname(os.path.abspath(__file__))
@@ -112,7 +168,7 @@ class DepthProcessor:
             self.update_state(status="error", error_message=f"Download failed: {str(e)}")
             raise e
 
-    def process_video(self, input_video_path, output_video_path, model_key="small", colormap_key="grayscale", blend=0.6):
+    def process_video(self, input_video_path, output_video_path, model_key="small", colormap_key="grayscale", blend=0.6, min_depth=0.0, max_depth=1.0, gamma=1.0, filter_type="median", edits=None):
         self._cancel_flag = False
         self.update_state(status="starting", progress=0.0, current_frame=0, total_frames=0, error_message="")
         
@@ -162,6 +218,26 @@ class DepthProcessor:
             
             frame_idx = 0
             
+            # Parse edits dictionary {frame_idx: mask_rgba}
+            parsed_edits = {}
+            if edits:
+                for k, v in edits.items():
+                    try:
+                        f_idx = int(k)
+                        mask_rgba = decode_base64_mask(v)
+                        if mask_rgba is not None:
+                            parsed_edits[f_idx] = mask_rgba
+                    except Exception as e:
+                        print(f"Error parsing edit for frame {k}: {str(e)}")
+            
+            # Edits tracking state
+            active_tracker = None
+            active_mask = None
+            override_mask = None
+            initial_mask_crop = None
+            initial_override_crop = None
+            prev_bbox = None
+            
             # ImageNet normalization stats
             mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
             std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
@@ -179,6 +255,61 @@ class DepthProcessor:
                 ret, frame = cap.read()
                 if not ret:
                     break
+                
+                # Check for manual edit at this frame index
+                if frame_idx in parsed_edits:
+                    mask_rgba = parsed_edits[frame_idx]
+                    
+                    if mask_rgba.shape[0] != height or mask_rgba.shape[1] != width:
+                        mask_rgba = cv2.resize(mask_rgba, (width, height), interpolation=cv2.INTER_NEAREST)
+                        
+                    if len(mask_rgba.shape) == 2:
+                        h_m, w_m = mask_rgba.shape
+                        temp = np.zeros((h_m, w_m, 4), dtype=np.uint8)
+                        temp[:, :, 0] = mask_rgba
+                        temp[:, :, 3] = (mask_rgba > 0).astype(np.uint8) * 255
+                        mask_rgba = temp
+                        
+                    override_mask = mask_rgba[:, :, 3] > 127
+                    active_mask = mask_rgba[:, :, 0]
+                    
+                    y_indices, x_indices = np.where(override_mask)
+                    if len(x_indices) > 0 and len(y_indices) > 0:
+                        x_min, x_max = x_indices.min(), x_indices.max()
+                        y_min, y_max = y_indices.min(), y_indices.max()
+                        
+                        x_min_clip = max(0, min(x_min, width - 1))
+                        y_min_clip = max(0, min(y_min, height - 1))
+                        w_clip = max(5, min(x_max - x_min + 1, width - x_min_clip))
+                        h_clip = max(5, min(y_max - y_min + 1, height - y_min_clip))
+                        
+                        prev_bbox = (x_min_clip, y_min_clip, w_clip, h_clip)
+                        initial_mask_crop = active_mask[y_min_clip:y_min_clip+h_clip, x_min_clip:x_min_clip+w_clip].copy()
+                        initial_override_crop = override_mask[y_min_clip:y_min_clip+h_clip, x_min_clip:x_min_clip+w_clip].copy()
+                        
+                        active_tracker = cv2.TrackerMIL_create()
+                        active_tracker.init(frame, prev_bbox)
+                    else:
+                        active_tracker = None
+                        active_mask = None
+                        override_mask = None
+                        prev_bbox = None
+                        
+                elif active_tracker is not None:
+                    success, bbox = active_tracker.update(frame)
+                    if success:
+                        x_i, y_i, w_i, h_i = [int(v) for v in bbox]
+                        prev_bbox = (x_i, y_i, w_i, h_i)
+                    else:
+                        x_i, y_i, w_i, h_i = prev_bbox
+                        
+                    active_mask, override_mask = get_warped_mask(
+                        initial_mask_crop,
+                        initial_override_crop,
+                        (x_i, y_i, w_i, h_i),
+                        width,
+                        height
+                    )
                 
                 # Preprocess Frame
                 # cv2 reads in BGR, model expects RGB
@@ -219,6 +350,20 @@ class DepthProcessor:
                 # Clip to prevent overflow and keep as float32 for high-precision blending
                 depth_norm = np.clip(depth_norm, 0, 255).astype(np.float32)
                 
+                # Near/Far depth range clipping (values normalized between 0.0 and 1.0)
+                depth_norm_01 = depth_norm / 255.0
+                depth_norm_01 = np.clip(depth_norm_01, min_depth, max_depth)
+                if max_depth - min_depth > 1e-5:
+                    depth_norm_01 = (depth_norm_01 - min_depth) / (max_depth - min_depth)
+                else:
+                    depth_norm_01 = np.zeros_like(depth_norm_01)
+                
+                # Apply Gamma Correction
+                if abs(gamma - 1.0) > 1e-5:
+                    depth_norm_01 = np.power(depth_norm_01, gamma)
+                
+                depth_norm = depth_norm_01 * 255.0
+                
                 # Constant Temporal Frame Blending
                 if prev_depth_norm is None:
                     prev_depth_norm = depth_norm.copy()
@@ -235,8 +380,16 @@ class DepthProcessor:
                 # 2. Resize back to original dimensions
                 depth_resized = cv2.resize(depth_norm_uint8, (width, height))
                 
-                # Apply fast spatial median filter to clean up raw prediction pixel jitter
-                depth_resized = cv2.medianBlur(depth_resized, 3)
+                # Apply spatial filter to clean up raw prediction pixel jitter
+                if filter_type == "median":
+                    depth_resized = cv2.medianBlur(depth_resized, 3)
+                elif filter_type == "bilateral":
+                    # Bilateral filter smooths regions while preserving crisp edges
+                    depth_resized = cv2.bilateralFilter(depth_resized, 5, 50, 50)
+                
+                # Apply manual overrides/tracking masks
+                if override_mask is not None:
+                    depth_resized[override_mask] = active_mask[override_mask]
                 
                 # 3. Apply color mapping if requested
                 colormap_id = COLORMAPS.get(colormap_key)
@@ -263,16 +416,21 @@ class DepthProcessor:
                     os.remove(output_video_path)
                 return False
                 
-            # Transcode the temporary video to a browser-compatible web-optimized H.264 MP4 with faststart
+            # Transcode the temporary video to a browser-compatible web-optimized H.264 MP4 with faststart,
+            # merging back original audio if present.
             import subprocess
             try:
                 cmd = [
                     'ffmpeg', '-y',
                     '-i', temp_output_path,
+                    '-i', input_video_path,
+                    '-map', '0:v:0',
+                    '-map', '1:a?',
                     '-c:v', 'libx264',
                     '-pix_fmt', 'yuv420p',
                     '-preset', 'fast',
                     '-crf', '22',
+                    '-c:a', 'aac',
                     '-movflags', '+faststart',
                     output_video_path
                 ]

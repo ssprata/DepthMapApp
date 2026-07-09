@@ -7,6 +7,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
+import json
+
 from depth_processor import processor
 
 app = FastAPI(title="Video Depth Map Generator API")
@@ -80,15 +82,57 @@ async def upload_file(file: UploadFile = File(...)):
             os.remove(temp_path)
         raise HTTPException(status_code=500, detail=f"Failed to upload/transcode file: {str(e)}")
 
-def run_in_background(input_path, output_path, model, colormap, blend):
-    processor.process_video(input_path, output_path, model_key=model, colormap_key=colormap, blend=blend)
+@app.get("/api/video-info")
+def get_video_info(filename: str):
+    input_path = os.path.join(UPLOAD_DIR, filename)
+    if not os.path.exists(input_path):
+        raise HTTPException(status_code=404, detail="Uploaded file not found.")
+    
+    import cv2
+    cap = cv2.VideoCapture(input_path)
+    if not cap.isOpened():
+        raise HTTPException(status_code=400, detail="Could not open video file.")
+        
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    duration = total_frames / fps if fps > 0 else 0
+    cap.release()
+    
+    return {
+        "width": width,
+        "height": height,
+        "fps": fps,
+        "total_frames": total_frames,
+        "duration": duration
+    }
+
+def run_in_background(input_path, output_path, model, colormap, blend, min_depth, max_depth, gamma, filter_type, edits=None):
+    processor.process_video(
+        input_path, 
+        output_path, 
+        model_key=model, 
+        colormap_key=colormap, 
+        blend=blend,
+        min_depth=min_depth,
+        max_depth=max_depth,
+        gamma=gamma,
+        filter_type=filter_type,
+        edits=edits
+    )
 
 @app.post("/api/process")
 async def start_process(
     filename: str = Form(...),
     model: str = Form("small"),
     colormap: str = Form("grayscale"),
-    blend: float = Form(0.6)
+    blend: float = Form(0.6),
+    min_depth: float = Form(0.0),
+    max_depth: float = Form(1.0),
+    gamma: float = Form(1.0),
+    filter_type: str = Form("median"),
+    edits: str = Form(None)
 ):
     input_path = os.path.join(UPLOAD_DIR, filename)
     if not os.path.exists(input_path):
@@ -106,10 +150,18 @@ async def start_process(
     output_filename = f"depth_{colormap}_{base_name}.mp4"
     output_path = os.path.join(OUTPUT_DIR, output_filename)
     
+    # Parse edits if provided
+    parsed_edits = None
+    if edits:
+        try:
+            parsed_edits = json.loads(edits)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid edits format: {str(e)}")
+    
     # Run processing in a background thread so FastAPI remains responsive
     thread = threading.Thread(
         target=run_in_background,
-        args=(input_path, output_path, model, colormap, blend),
+        args=(input_path, output_path, model, colormap, blend, min_depth, max_depth, gamma, filter_type, parsed_edits),
         daemon=True
     )
     thread.start()

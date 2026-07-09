@@ -80,7 +80,53 @@
                             <input type="range" id="blend-slider" min="0.1" max="1.0" step="0.05" value="0.6">
                             <span id="blend-val">0.60</span>
                         </div>
-                        <small class="help-text">Lower values (e.g. 0.3) smooth flickering but add motion trails. Higher values (e.g. 0.8) are sharp and responsive but may flicker.</small>
+                        <small class="help-text">Lower values smooth flickering but add motion trails. Higher values are sharp and responsive but may flicker.</small>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group half">
+                            <label for="min-depth-slider">Near Clip (Min Depth)</label>
+                            <div class="slider-container">
+                                <input type="range" id="min-depth-slider" min="0.0" max="1.0" step="0.05" value="0.0">
+                                <span id="min-depth-val">0.00</span>
+                            </div>
+                        </div>
+                        <div class="form-group half">
+                            <label for="max-depth-slider">Far Clip (Max Depth)</label>
+                            <div class="slider-container">
+                                <input type="range" id="max-depth-slider" min="0.0" max="1.0" step="0.05" value="1.0">
+                                <span id="max-depth-val">1.00</span>
+                            </div>
+                        </div>
+                    </div>
+                    <small class="help-text" style="margin-top: -12px; margin-bottom: 16px;">
+                        <strong>Near Clip (Min):</strong> Threshold for foreground. Objects closer than this become pure white (Maximum depth). Increase this to focus detail on foreground subjects.<br>
+                        <strong>Far Clip (Max):</strong> Threshold for background. Objects farther than this become pure black (Minimum depth). Decrease this to eliminate far background elements.
+                    </small>
+
+                    <div class="form-group">
+                        <label for="gamma-slider">Depth Contrast Curve (Gamma)</label>
+                        <div class="slider-container">
+                            <input type="range" id="gamma-slider" min="0.1" max="3.0" step="0.05" value="1.0">
+                            <span id="gamma-val">1.00</span>
+                        </div>
+                        <small class="help-text">
+                            Distributes detail resolution between foreground and background:<br>
+                            <strong>Values &lt; 1.0:</strong> Expands near-to-mid depth details, adding higher visual contrast to close objects.<br>
+                            <strong>Values &gt; 1.0:</strong> Compresses close details and pulls far background elements forward, resolving more detail in the distance.
+                        </small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="filter-select">Spatial Edge Filtering</label>
+                        <div class="select-wrapper">
+                            <select id="filter-select">
+                                <option value="none">None (Raw depth output)</option>
+                                <option value="median" selected>Median Blur (Fast noise reduction)</option>
+                                <option value="bilateral">Bilateral Filter (Sharp edges, smooth areas)</option>
+                            </select>
+                        </div>
+                        <small class="help-text">Bilateral filtering retains edge boundaries but increases processing time.</small>
                     </div>
 
                     <div class="form-group">
@@ -131,6 +177,70 @@
                     </div>
                 </section>
 
+                <!-- Video Editor Section -->
+                <section id="editor-section" class="panel glass hidden">
+                    <div class="panel-header">
+                        <h2>3. Paint Overrides & Track Objects (Optional)</h2>
+                        <p>Draw on moving or static objects to force them to full white depth or erase details, and track them forward.</p>
+                    </div>
+
+                    <div class="editor-workspace">
+                        <div class="editor-video-wrapper">
+                            <video id="editor-video" muted playsinline></video>
+                            <canvas id="editor-canvas"></canvas>
+                        </div>
+                        
+                        <div class="editor-toolbar">
+                            <div class="brush-selector">
+                                <button id="brush-white-btn" class="brush-btn active" type="button" title="Paint white (Force maximum depth)">
+                                    <span class="color-dot white"></span> White (Foreground)
+                                </button>
+                                <button id="brush-black-btn" class="brush-btn" type="button" title="Paint black (Force minimum depth)">
+                                    <span class="color-dot black"></span> Black (Background)
+                                </button>
+                                <button id="brush-eraser-btn" class="brush-btn" type="button" title="Eraser (Restore AI-predicted depth)">
+                                    <span class="brush-icon">🧹</span> Eraser
+                                </button>
+                            </div>
+
+                            <div class="editor-control-slider">
+                                <label for="brush-size-slider">Brush Size: <span id="brush-size-val">20px</span></label>
+                                <input type="range" id="brush-size-slider" min="2" max="100" value="20">
+                            </div>
+
+                            <div class="editor-control-slider">
+                                <label for="editor-opacity-slider">Overlay Opacity: <span id="editor-opacity-val">0.50</span></label>
+                                <input type="range" id="editor-opacity-slider" min="0.1" max="1.0" step="0.05" value="0.5">
+                            </div>
+
+                            <div class="editor-buttons">
+                                <button id="editor-clear-frame-btn" class="btn btn-secondary danger small" type="button">
+                                    Clear Frame Mask
+                                </button>
+                                <button id="editor-clear-all-btn" class="btn btn-secondary small" type="button">
+                                    Clear All Masks
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="editor-timeline-info">
+                        <div class="timeline-title">
+                            <span>Keyframes with Overrides:</span>
+                            <span id="timeline-keyframes-count">0 frames edited</span>
+                        </div>
+                        <div id="timeline-markers-list" class="timeline-markers-list">
+                            <!-- timeline list of frames with edits -->
+                        </div>
+                    </div>
+
+                    <div class="editor-generate-row">
+                        <button id="editor-generate-btn" class="btn btn-primary" type="button">
+                            <span>⚡ Generate Depth Map with Tracking</span>
+                        </button>
+                    </div>
+                </section>
+
                 <!-- Processing / Progress Area -->
                 <section id="progress-section" class="panel glass hidden">
                     <div class="processing-content">
@@ -178,22 +288,56 @@
                         </a>
                     </div>
 
-                    <div class="players-container">
-                        <div class="player-wrapper">
-                            <h3>Original Footage</h3>
-                            <video id="video-source" controls muted loop></video>
+                    <div class="preview-tabs">
+                        <button id="tab-split" class="tab-btn active">Side-by-Side Comparison</button>
+                        <button id="tab-3d" class="tab-btn">Interactive 3D Visualizer</button>
+                    </div>
+
+                    <!-- Split locked video player comparison -->
+                    <div id="split-view-container">
+                        <div class="players-container">
+                            <div class="player-wrapper">
+                                <h3>Original Footage</h3>
+                                <video id="video-source" controls muted loop></video>
+                            </div>
+                            <div class="player-wrapper">
+                                <h3>Depth Estimation Map</h3>
+                                <video id="video-depth" controls muted loop></video>
+                            </div>
                         </div>
-                        <div class="player-wrapper">
-                            <h3>Depth Estimation Map</h3>
-                            <video id="video-depth" controls muted loop></video>
+
+                        <div class="sync-controls">
+                            <button id="sync-play-btn" class="btn btn-secondary">
+                                Play / Pause Both Sync-locked
+                            </button>
+                            <p class="help-text">Playing, pausing, or scrubbing either player will automatically sync both videos.</p>
                         </div>
                     </div>
 
-                    <div class="sync-controls">
-                        <button id="sync-play-btn" class="btn btn-secondary">
-                            Play / Pause Both Sync-locked
-                        </button>
-                        <p class="help-text">Playing, pausing, or scrubbing either player will automatically sync both videos.</p>
+                    <!-- Interactive WebGL displacement view container -->
+                    <div id="three-view-container" class="hidden">
+                        <div class="canvas-wrapper">
+                            <div id="3d-canvas-parent"></div>
+                        </div>
+                        <div class="three-controls">
+                            <div class="control-row">
+                                <div class="control-group">
+                                    <label for="extrusion-slider">Displacement Intensity: <span id="extrusion-val">1.50</span></label>
+                                    <input type="range" id="extrusion-slider" min="0.0" max="5.0" step="0.1" value="1.5">
+                                </div>
+                                <div class="checkbox-controls">
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" id="wireframe-toggle">
+                                        <span>Wireframe</span>
+                                    </label>
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" id="auto-rotate-toggle" checked>
+                                        <span>Auto Rotate</span>
+                                    </label>
+                                </div>
+                            </div>
+                            <p class="help-text">Controls: Left-click + drag to Rotate camera | Right-click + drag to Pan | Scroll wheel to Zoom</p>
+                        </div>
                     </div>
                 </section>
             </div>
@@ -204,6 +348,9 @@
         </footer>
     </div>
     
+    <!-- Three.js and OrbitControls for 3D Visualizer -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
     <script src="app.js"></script>
 </body>
 </html>
