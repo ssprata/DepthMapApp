@@ -12,6 +12,8 @@
 </head>
 <body>
     <div class="glow-bg"></div>
+
+    <button id="run-test-editor" style="position: fixed; top: 10px; left: 10px; z-index: 9999; padding: 10px; background: red; color: white;" onclick="loadInteractiveEditor('Comp_1.mp4')">Run Test Editor</button>
     <div class="container">
         <!-- Header -->
         <header>
@@ -278,14 +280,19 @@
                             <h2>3. Generation Complete!</h2>
                             <p>Sync-locked video comparison player</p>
                         </div>
-                        <a id="download-btn" class="btn btn-primary btn-icon-label" download>
-                            <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
-                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                                <polyline points="7 10 12 15 17 10"></polyline>
-                                <line x1="12" y1="15" x2="12" y2="3"></line>
-                            </svg>
-                            Download Depth Map Video
-                        </a>
+                        <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+                            <button id="results-edit-btn" class="btn btn-secondary btn-icon-label" type="button">
+                                🎨 Edit Mask / Overrides
+                            </button>
+                            <a id="download-btn" class="btn btn-primary btn-icon-label" download>
+                                <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                    <polyline points="7 10 12 15 17 10"></polyline>
+                                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                                </svg>
+                                Download Depth Map Video
+                            </a>
+                        </div>
                     </div>
 
                     <div class="preview-tabs">

@@ -61,11 +61,32 @@ const editorClearAllBtn = document.getElementById('editor-clear-all-btn');
 const timelineKeyframesCount = document.getElementById('timeline-keyframes-count');
 const timelineMarkersList = document.getElementById('timeline-markers-list');
 const editorGenerateBtn = document.getElementById('editor-generate-btn');
+const resultsEditBtn = document.getElementById('results-edit-btn');
 
 // App State
 let selectedFile = null;
 let pollInterval = null;
 let currentUploadedFilename = '';
+
+function updateSidebarButton() {
+    if (!generateBtn) return;
+    const btnText = generateBtn.querySelector('span');
+    if (!btnText) return;
+    
+    if (!selectedFile) {
+        generateBtn.disabled = true;
+        btnText.textContent = "Generate Depth Map";
+    } else if (!currentUploadedFilename) {
+        generateBtn.disabled = false;
+        btnText.textContent = "Upload & Open Editor";
+    } else if (!resultsSection.classList.contains('hidden')) {
+        generateBtn.disabled = false;
+        btnText.textContent = "Back to Editor";
+    } else if (!editorSection.classList.contains('hidden')) {
+        generateBtn.disabled = false;
+        btnText.textContent = "Start Depth Estimation";
+    }
+}
 
 // Editor Drawing State
 let videoWidth = 0;
@@ -135,6 +156,22 @@ function handleFileSelect(file) {
     selectedFileInfo.classList.remove('hidden');
     dropZone.classList.add('hidden');
     generateBtn.disabled = false;
+    
+    // Reset uploaded filename since it is a new file selection
+    currentUploadedFilename = '';
+    
+    // Hide previous panels
+    resultsSection.classList.add('hidden');
+    idleSection.classList.add('hidden');
+    editorSection.classList.add('hidden');
+    cleanupThreeJS();
+    
+    // Auto-trigger upload and editor
+    progressSection.classList.remove('hidden');
+    generateBtn.disabled = true;
+    uploadAndStartProcessing();
+    
+    updateSidebarButton();
 }
 
 removeFileBtn.addEventListener('click', (e) => {
@@ -156,6 +193,8 @@ function resetUpload() {
     idleSection.classList.remove('hidden');
     cleanupThreeJS();
     frameEdits = {}; // Clear edits
+    currentUploadedFilename = '';
+    updateSidebarButton();
 }
 
 // Colormap selection
@@ -190,9 +229,7 @@ gammaSlider.addEventListener('input', (e) => {
 generateBtn.addEventListener('click', () => {
     if (!selectedFile) return;
     
-    if (currentUploadedFilename) {
-        startEstimationWorkflow();
-    } else {
+    if (!currentUploadedFilename) {
         cleanupThreeJS();
         
         // Hide results and idle state if showing
@@ -204,6 +241,15 @@ generateBtn.addEventListener('click', () => {
         generateBtn.disabled = true;
         
         uploadAndStartProcessing();
+    } else if (!resultsSection.classList.contains('hidden')) {
+        // Go back to editor
+        resultsSection.classList.add('hidden');
+        editorSection.classList.remove('hidden');
+        cleanupThreeJS();
+        updateSidebarButton();
+    } else {
+        // Editor is already visible, start estimation
+        startEstimationWorkflow();
     }
 });
 
@@ -379,6 +425,7 @@ function handleProcessingError(errorMsg) {
         cancelBtn.textContent = "Cancel Processing";
         cancelBtn.onclick = handleCancelClick;
         idleSection.classList.remove('hidden');
+        updateSidebarButton();
     };
 }
 
@@ -396,6 +443,7 @@ const handleCancelClick = () => {
             idleSection.classList.remove('hidden');
         }
         appendLog("Cancelled.");
+        updateSidebarButton();
     });
 };
 cancelBtn.onclick = handleCancelClick;
@@ -420,6 +468,7 @@ function showResults(origFilename, outputFilename) {
     // Load videos
     videoSource.load();
     videoDepth.load();
+    updateSidebarButton();
 }
 
 // Player Synchronization Logic (Configured once globally at load time)
@@ -667,6 +716,7 @@ function loadInteractiveEditor(filename) {
             
             frameEdits = {};
             updateTimelineUI();
+            updateSidebarButton();
         })
         .catch(err => {
             appendLog("Error fetching video details: " + err.message);
@@ -915,6 +965,14 @@ function startEstimationWorkflow() {
     
     // Start estimation
     triggerDepthEstimation(currentUploadedFilename);
+    updateSidebarButton();
 }
 
 editorGenerateBtn.addEventListener('click', startEstimationWorkflow);
+
+resultsEditBtn.addEventListener('click', () => {
+    resultsSection.classList.add('hidden');
+    editorSection.classList.remove('hidden');
+    cleanupThreeJS();
+    updateSidebarButton();
+});
